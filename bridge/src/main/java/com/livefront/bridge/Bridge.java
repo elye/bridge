@@ -11,6 +11,7 @@ import android.view.View;
 public class Bridge {
 
     private static volatile BridgeDelegate sDelegate;
+    public static boolean sSaveToFile = true;
 
     private static synchronized void checkInitialization() {
         if (sDelegate == null) {

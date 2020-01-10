@@ -14,6 +14,7 @@ import android.support.annotation.Nullable;
 import android.view.View;
 
 import com.livefront.bridge.util.BundleUtil;
+import com.livefront.bridge.util.FileStorageUtil;
 import com.livefront.bridge.wrapper.WrapperUtils;
 
 import java.util.List;
@@ -26,6 +27,8 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+
+import static com.livefront.bridge.Bridge.sSaveToFile;
 
 class BridgeDelegate {
 
@@ -51,6 +54,7 @@ class BridgeDelegate {
     private List<Runnable> mPendingWriteTasks = new CopyOnWriteArrayList<>();
     private Map<String, Bundle> mUuidBundleMap = new ConcurrentHashMap<>();
     private Map<Object, String> mObjectUuidMap = new WeakHashMap<>();
+    private Context mContext;
     private SavedStateHandler mSavedStateHandler;
     private SharedPreferences mSharedPreferences;
     private ViewSavedStateHandler mViewSavedStateHandler;
@@ -58,6 +62,7 @@ class BridgeDelegate {
     BridgeDelegate(@NonNull Context context,
                    @NonNull SavedStateHandler savedStateHandler,
                    @Nullable ViewSavedStateHandler viewSavedStateHandler) {
+        mContext = context;
         mSharedPreferences = context.getSharedPreferences(TAG, Context.MODE_PRIVATE);
         mSavedStateHandler = savedStateHandler;
         mViewSavedStateHandler = viewSavedStateHandler;
@@ -85,9 +90,7 @@ class BridgeDelegate {
     void clearAll() {
         mUuidBundleMap.clear();
         mObjectUuidMap.clear();
-        mSharedPreferences.edit()
-                .clear()
-                .apply();
+        deleteAllFromDisk();
     }
 
     private void clearDataForUuid(@NonNull String uuid) {
@@ -96,6 +99,7 @@ class BridgeDelegate {
     }
 
     private void clearDataFromDisk(@NonNull String uuid) {
+        deleteFromFile(uuid);
         mSharedPreferences.edit()
                 .remove(getKeyForEncodedBundle(uuid))
                 .apply();
@@ -219,13 +223,38 @@ class BridgeDelegate {
         mPendingWriteTasksLatch = null;
     }
 
+    private void deleteAllFromDisk() {
+        if (sSaveToFile) {
+            for (Map.Entry<String, ?> entry : mSharedPreferences.getAll().entrySet()) {
+                deleteFromFile((String) entry.getValue());
+            }
+        }
+        mSharedPreferences.edit()
+                .clear()
+                .apply();
+    }
+
+    private void deleteFromFile(@NonNull String uuid) {
+        // No need to delete File if it is not stored to file.
+        if (!sSaveToFile) return;
+        String storedUuid = mSharedPreferences.getString(getKeyForEncodedBundle(uuid), null);
+        if (storedUuid == null) {
+            return;
+        }
+        FileStorageUtil.deleteFile(storedUuid, mContext);
+    }
+
     @Nullable
     private Bundle readFromDisk(@NonNull String uuid) {
         String encodedString = mSharedPreferences.getString(getKeyForEncodedBundle(uuid), null);
         if (encodedString == null) {
             return null;
         }
-        return BundleUtil.fromEncodedString(encodedString);
+        if (sSaveToFile) {
+            return BundleUtil.fromBytes(FileStorageUtil.readFromFile(encodedString, mContext));
+        } else {
+            return BundleUtil.fromEncodedString(encodedString);
+        }
     }
 
     @SuppressLint("NewApi")
@@ -245,9 +274,7 @@ class BridgeDelegate {
                             return;
                         }
 
-                        mSharedPreferences.edit()
-                                .clear()
-                                .apply();
+                        deleteAllFromDisk();
                     }
 
                     @Override
@@ -365,10 +392,15 @@ class BridgeDelegate {
 
     private void writeToDisk(@NonNull String uuid,
                              @NonNull Bundle bundle) {
-        String encodedString = BundleUtil.toEncodedString(bundle);
+        String toStoreInPreference;
+        if (sSaveToFile) {
+            FileStorageUtil.writeToFile(uuid, BundleUtil.toBytes(bundle), mContext);
+            toStoreInPreference = uuid;
+        } else {
+            toStoreInPreference = BundleUtil.toEncodedString(bundle);
+        }
         mSharedPreferences.edit()
-                .putString(getKeyForEncodedBundle(uuid), encodedString)
+                .putString(getKeyForEncodedBundle(uuid), toStoreInPreference)
                 .apply();
     }
-
 }
